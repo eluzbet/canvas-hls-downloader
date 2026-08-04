@@ -1,5 +1,6 @@
 let lastSentTitle = null;
 
+// sends the current canvas title to the background script
 function sendPageMetadata() {
   const pageTitle = document.title.trim();
 
@@ -15,7 +16,7 @@ function sendPageMetadata() {
       pageTitle
     })
     .catch(() => {
-      // The extension may be reloading while the page remains open.
+      // extension may be reloading
     });
 }
 
@@ -34,3 +35,4 @@ if (titleElement) {
 
 window.addEventListener("pageshow", sendPageMetadata);
 window.addEventListener("popstate", sendPageMetadata);
+
