@@ -1,57 +1,84 @@
 # Canvas HLS Downloader
 
-Firefox-only WebExtension for detecting and analyzing HLS playlist requests made by FIU Canvas video pages.
+Firefox-only WebExtension for detecting analyzing and downloading authorized HLS videos from FIU Canvas.
 
 ## Current status
 
-Phase 2 is implemented for local testing.
+Phase 3 is ready for local Firefox testing.
 
 It can:
 
 - Detect pages on `https://fiu.instructure.com`.
-- Observe completed `.m3u8` requests after the user grants optional stream-host access.
-- Accept only HTTP status `200` playlist responses.
-- Associate detected playlists with the FIU Canvas tab that requested them.
-- Display the Canvas page title and a redacted stream label in the popup.
-- Fetch captured playlists again from the Firefox background extension context.
-- Parse HLS master playlists and media playlists.
-- List available variant qualities from `EXT-X-STREAM-INF`.
-- Select the highest resolution and then the highest bandwidth.
-- Parse media segment counts, estimated duration, initialization-map presence, encryption methods, and container type.
-- Keep complete signed playlist URLs inside Firefox session memory only.
-- Log only redacted request and analysis details.
+- Observe successful `.m3u8` requests after the user grants optional stream-host access.
+- Parse HLS master and media playlists.
+- List available qualities and select the highest resolution.
+- Download unencrypted video-on-demand MPEG-TS media playlists.
+- Retry each failed media segment up to three times.
+- Support ordinary segments and `EXT-X-BYTERANGE` segments.
+- Write one segment at a time into Firefox Origin Private File System storage.
+- Show percentage segment count downloaded size speed and status.
+- Create a clean `.ts` filename from the Canvas page title and selected quality.
+- Save the completed `.ts` file through Firefox Downloads.
+- Cancel an active segment download or Firefox save operation.
+- Delete temporary media data after completion cancellation or failure.
+- Keep complete playlist and segment URLs out of the popup and console.
 
-It does not download initialization files, media segments, subtitles, or final videos yet.
+It does not support encrypted HLS live playlists fragmented MP4 separate audio groups playlist discontinuities pause or resume yet.
 
-## Phase 2 architecture
+## Phase 3 architecture
 
-- `manifest.json`: Manifest V3 settings and extension permissions.
-- `lib/hls.js`: Plain JavaScript HLS parser for master and media playlists.
-- `background/background.js`: Detects successful playlists, fetches them for analysis, chooses the highest quality, and stores per-tab state in `storage.session`.
+- `manifest.json`: Manifest V3 settings plus the Firefox `downloads` permission.
+- `lib/hls.js`: Plain JavaScript parser for master and media playlists.
+- `background/background.js`: Detects playlists analyzes quality downloads MPEG-TS segments writes temporary media to OPFS and saves the final file through Firefox Downloads.
 - `content/canvas-page.js`: Reports the current Canvas page title.
-- `popup/`: Shows detection status, playlist metadata, quality, segment count, duration, container type, and encryption status.
+- `popup/`: Shows playlist metadata download progress size speed status and controls.
 
 ## Permissions
 
 | Permission | Reason |
 | --- | --- |
-| `storage` | Keeps detected stream and analysis state in Firefox memory for the browser session. |
-| `webRequest` | Observes completed HLS playlist requests. It does not block or modify requests. |
-| `https://fiu.instructure.com/*` | Detects FIU Canvas pages and associates network requests with those tabs. |
-| Optional `<all_urls>` | HLS playlists may come from an unknown external CDN. Firefox requires host access to observe and fetch that cross-origin resource. |
+| `storage` | Keeps private playlist state and safe progress state in Firefox session memory. |
+| `webRequest` | Observes completed HLS playlist requests without blocking or modifying them. |
+| `downloads` | Saves the completed local MPEG-TS file through Firefox Downloads and cancels the save when requested. |
+| `https://fiu.instructure.com/*` | Detects FIU Canvas pages and links HLS requests to the correct tab. |
+| Optional `<all_urls>` | HLS playlists and media segments can come from an unknown external video host. |
 
-The extension does not request `cookies`, `downloads`, or `webRequestBlocking` in Phase 2. The manifest declares `data_collection_permissions.required` as `none` and requires Firefox 140 or later.
+The extension does not request the `cookies` permission `webRequestBlocking` or access to authentication headers.
 
 ## Privacy behavior
 
-- No analytics or external services.
-- No cookies or request headers are read directly.
-- Background playlist fetches use Firefox's existing credentials when browser policy allows them.
-- Complete signed playlist URLs are not shown in the popup or written to console logs.
-- Complete signed playlist URLs are held only in `browser.storage.session`.
-- Playlist text and segment URLs are parsed in memory and discarded after analysis.
-- The popup receives only redacted stream labels and nonsecret playlist metadata.
-- Errors are converted to safe codes and messages before logging.
+- No analytics or external service.
+- No extension data is sent to another server.
+- The extension only requests the playlists and segments that make up the selected video.
+- Complete signed playlist URLs stay in `browser.storage.session` and are removed before popup messages.
+- Segment URLs exist only in temporary JavaScript objects during the active download.
+- Cookies and authorization headers are not read or logged.
+- Console logs contain safe fields such as tab ID status segment count and byte count.
+- Temporary video bytes are written to Firefox OPFS and deleted after the Firefox download finishes cancels or fails.
+- The Canvas page title is used only for the local filename and popup display.
+
+## MPEG-TS handling
+
+Phase 3 saves compatible MPEG-TS HLS segments in playlist order as one `.ts` file. This does not require FFmpeg or a third-party JavaScript library.
+
+Phase 3 rejects a playlist when it contains:
+
+- HLS encryption
+- A live playlist without `EXT-X-ENDLIST`
+- An initialization segment
+- A discontinuity
+- A separate audio group
+- A non-MPEG-TS container
+
+These checks keep the first downloader limited to the stream format tested on FIU Canvas.
+
+## Large file design
+
+Phase 3 does not combine the entire video in JavaScript memory. Each segment is fetched separately and written to Firefox OPFS before the completed disk-backed file is passed to Firefox Downloads.
+
+OPFS uses browser-managed storage and remains subject to Firefox storage quota. The extension checks estimated free storage when bitrate and duration are available and reports a safe error when Firefox runs out of temporary space.
+
+Files larger than 2 GB still require a specific Firefox test before this project can claim confirmed support. The code is designed to avoid full-file RAM use but the complete OPFS-to-Downloads path must be measured with a large authorized video.
 
 ## Project tree
 
@@ -78,43 +105,54 @@ canvas-hls-downloader/
 2. Enter `about:debugging` in the address bar.
 3. Select **This Firefox**.
 4. Find Canvas HLS Downloader and select **Reload**.
-5. If it is no longer listed, select **Load Temporary Add-on** and choose `manifest.json`.
+5. If it is not listed select **Load Temporary Add-on** and choose `manifest.json`.
 6. Reload the FIU Canvas video page after the extension reloads.
 
 The temporary extension is removed when Firefox restarts.
 
-## Phase 2 test
+## Phase 3 test
 
 1. Sign in to FIU Canvas in the same Firefox profile.
-2. Open an FIU Canvas video page.
-3. Open the extension popup and confirm stream access is enabled.
-4. Reload the page and press Play.
-5. Wait until an `.m3u8` stream appears in the popup.
-6. Select **Analyze playlist**.
-7. Keep the popup open while it reads the captured playlists.
-8. Confirm the popup shows a playlist type.
-9. For a master playlist, confirm available qualities and a selected highest quality appear.
-10. Confirm segment count and estimated duration appear when the selected media playlist can be read.
-11. Confirm the container says `fragmented MP4`, `MPEG-TS`, `AAC`, or `unknown`.
-12. Confirm no signed URL or query value appears in the popup or extension console.
+2. Open an authorized Canvas video page.
+3. Reload the page and press Play.
+4. Open the extension popup.
+5. Select **Analyze playlist**.
+6. Confirm the selected media container says `MPEG-TS` and encryption says `No`.
+7. Select **Download MPEG-TS**.
+8. Keep the Canvas tab open while the download runs.
+9. Close and reopen the popup to confirm progress continues to appear.
+10. Confirm percentage segment count downloaded size and speed update.
+11. Confirm Firefox saves one `.ts` file in the Downloads folder.
+12. Play the saved file in a player that supports MPEG-TS.
+13. Confirm the extension console does not show a complete playlist URL segment URL token cookie or authorization header.
 
-## Known Phase 2 limitations
+## Cancel test
 
-- `webRequest.onCompleted` reports request completion but does not provide the response body, so Phase 2 fetches the playlist a second time for parsing.
-- A second request may fail when a server requires the exact original page request context, a short-lived token, a particular Referer header, or blocked third-party cookies.
-- Extension `fetch()` cannot set an arbitrary Canvas page URL as the Referer because Fetch only permits same-origin custom referrer values.
-- When the highest variant media playlist cannot be read, Phase 2 can still report the highest quality found in the master playlist as a partial result.
-- When no master playlist is available, quality may be inferred from observed names such as `480.m3u8`.
-- The parser does not download segments or combine media.
-- The parser does not yet handle alternate audio groups, subtitle groups, live playlist refreshes, low-latency HLS parts, or encrypted media decryption.
-- Temporary installation does not fully reproduce signed-extension permission behavior.
+1. Start a download.
+2. Select **Cancel download** before it completes.
+3. Confirm the status changes to canceled.
+4. Confirm no completed `.ts` file remains from that attempt.
+5. Start the download again and confirm it begins from the first segment.
+
+## Known Phase 3 limitations
+
+- Manifest V3 background scripts are non-persistent. Active fetch and file operations need to be tested with the popup closed for the full video duration.
+- Keep the source Canvas tab open. Closing it cancels the associated download and clears private state.
+- Pause and resume are not included in Phase 3.
+- Interrupted downloads do not resume after a Firefox restart.
+- The extension saves MPEG-TS as `.ts`. It does not remux the result into MP4.
+- Fragmented MP4 requires initialization-file and fragment handling in a later phase.
+- Separate audio and subtitle rendition downloads are not included.
+- Encrypted streams are rejected instead of attempting decryption.
+- OPFS storage quota can limit very large videos.
+- Temporary installation does not fully reproduce signed-extension behavior.
 
 ## Development rules
 
-- Plain JavaScript, HTML, and CSS.
+- Plain JavaScript HTML and CSS.
 - Firefox only.
 - No third-party dependencies.
 - No build system.
 - No external server.
-- No complete signed URL, cookie, token, or authentication-header logging.
-
+- No complete signed URL cookie token or authentication-header logging.
+- Short comments are placed above nearly every JavaScript method.

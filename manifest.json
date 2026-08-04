@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Canvas HLS Downloader",
-  "version": "0.2.0",
-  "description": "Detects and analyzes HLS playlists on FIU Canvas video pages.",
+  "version": "0.3.0",
+  "description": "Detects analyzes and downloads unencrypted MPEG TS HLS videos from FIU Canvas",
   "permissions": [
     "storage",
-    "webRequest"
+    "webRequest",
+    "downloads"
   ],
   "host_permissions": [
     "https://fiu.instructure.com/*"
@@ -45,4 +46,3 @@
     }
   }
 }
-
