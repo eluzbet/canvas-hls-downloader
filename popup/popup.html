@@ -10,6 +10,14 @@
     <main class="popup-shell">
       <h1>Canvas HLS Downloader</h1>
 
+      <section class="video-picker" aria-label="Detected videos">
+        <label for="video-selector">Detected video</label>
+        <select id="video-selector" disabled>
+          <option value="">No video detected</option>
+        </select>
+        <p id="video-count" class="video-count">0 videos found</p>
+      </section>
+
       <section class="status-card" aria-live="polite">
         <p id="page-status" class="status-line">Checking the current tab...</p>
 
@@ -19,7 +27,15 @@
             <dd id="page-title">Not detected</dd>
           </div>
           <div>
-            <dt>HLS stream</dt>
+            <dt>Provider</dt>
+            <dd id="video-provider">Not detected</dd>
+          </div>
+          <div>
+            <dt>Video source</dt>
+            <dd id="video-source">Not detected</dd>
+          </div>
+          <div>
+            <dt>Detected request</dt>
             <dd id="stream-label">Not detected</dd>
           </div>
           <div>
@@ -105,7 +121,7 @@
       </button>
 
       <p id="help-text" class="help-text">
-        Open an FIU Canvas video page and play the video.
+        Open an FIU Canvas video page and play a video.
       </p>
     </main>
 

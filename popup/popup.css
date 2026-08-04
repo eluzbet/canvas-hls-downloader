@@ -5,7 +5,7 @@
 
 body {
   margin: 0;
-  min-width: 380px;
+  min-width: 390px;
   background: Canvas;
   color: CanvasText;
 }
@@ -20,6 +20,37 @@ h1 {
   margin: 0;
   font-size: 18px;
   font-weight: 600;
+}
+
+.video-picker {
+  display: grid;
+  gap: 6px;
+}
+
+.video-picker label {
+  font-size: 12px;
+  color: color-mix(in srgb, CanvasText 65%, transparent);
+}
+
+select {
+  min-height: 38px;
+  width: 100%;
+  border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
+  border-radius: 7px;
+  padding: 7px 10px;
+  background: Canvas;
+  color: CanvasText;
+  font: inherit;
+}
+
+select:disabled {
+  opacity: 0.6;
+}
+
+.video-count {
+  margin: 0;
+  font-size: 12px;
+  color: color-mix(in srgb, CanvasText 65%, transparent);
 }
 
 .status-card {

@@ -7,8 +7,12 @@ const ACTIVE_DOWNLOAD_STATUSES = new Set([
   "canceling"
 ]);
 
+const videoSelector = document.querySelector("#video-selector");
+const videoCount = document.querySelector("#video-count");
 const pageStatus = document.querySelector("#page-status");
 const pageTitle = document.querySelector("#page-title");
+const videoProvider = document.querySelector("#video-provider");
+const videoSource = document.querySelector("#video-source");
 const streamLabel = document.querySelector("#stream-label");
 const detectedTime = document.querySelector("#detected-time");
 const analysisStatus = document.querySelector("#analysis-status");
@@ -112,6 +116,46 @@ async function hasStreamHostPermission() {
   });
 }
 
+// finds the selected video summary
+function getSelectedVideo(state) {
+  return state?.videos?.find((video) => video.id === state.selectedVideoId) || null;
+}
+
+// makes one readable selector label
+function makeVideoOptionLabel(video) {
+  const sourceText = video.sourceTypes?.length
+    ? video.sourceTypes.join(" + ")
+    : "source waiting";
+  return `${video.label} · ${video.provider} · ${sourceText}`;
+}
+
+// fills the multi video selector
+function renderVideoSelector(state, downloadIsActive) {
+  const videos = Array.isArray(state?.videos) ? state.videos : [];
+  videoSelector.textContent = "";
+
+  if (videos.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No video detected";
+    videoSelector.append(option);
+    videoSelector.disabled = true;
+    videoCount.textContent = "0 videos found";
+    return;
+  }
+
+  for (const video of videos) {
+    const option = document.createElement("option");
+    option.value = video.id;
+    option.textContent = makeVideoOptionLabel(video);
+    option.selected = video.id === state.selectedVideoId;
+    videoSelector.append(option);
+  }
+
+  videoSelector.disabled = videos.length < 2 || downloadIsActive;
+  videoCount.textContent = `${videos.length} video${videos.length === 1 ? "" : "s"} found`;
+}
+
 // writes empty analysis values before analysis finishes
 function clearAnalysisFields() {
   playlistType.textContent = "Not available";
@@ -199,15 +243,15 @@ function getDownloadBlockReason(state) {
   const analysis = state?.analysis;
 
   if (analysis?.status !== "ready") {
-    return "Analyze the playlist before downloading";
+    return "Analyze the HLS playlist before downloading";
   }
 
   if (analysis.media?.container !== "MPEG-TS") {
-    return "Phase 3 only downloads MPEG TS streams";
+    return "Phase 4A only downloads MPEG TS HLS streams";
   }
 
   if (analysis.media?.isEncrypted) {
-    return "Encrypted HLS streams are not supported in Phase 3";
+    return "Encrypted HLS streams are not supported in Phase 4A";
   }
 
   if (analysis.media?.hasInitSegment) {
@@ -215,24 +259,26 @@ function getDownloadBlockReason(state) {
   }
 
   if (!analysis.media?.hasEndList) {
-    return "Live HLS playlists are not supported in Phase 3";
+    return "Live HLS playlists are not supported in Phase 4A";
   }
 
   if (analysis.media?.hasDiscontinuity) {
-    return "Playlists with discontinuities are not supported in Phase 3";
+    return "Playlists with discontinuities are not supported in Phase 4A";
   }
 
   if (analysis.selectedStream?.audioGroup) {
-    return "Separate audio groups are not supported in Phase 3";
+    return "Separate audio groups are not supported in Phase 4A";
   }
 
   return null;
 }
 
-// renders all current tab playlist and download state
+// renders all current tab video analysis and download state
 function renderState(state, streamPermissionGranted) {
   const isCanvasPage = Boolean(state?.isCanvasPage);
-  const hasStream = Boolean(state?.streamDetected && state.stream);
+  const selectedVideo = getSelectedVideo(state);
+  const hasSource = Boolean(state?.streamDetected && state.stream);
+  const hasHls = Boolean(selectedVideo?.canAnalyzeHls);
   const isAnalyzing = state?.analysis?.status === "loading";
   const downloadIsActive = ACTIVE_DOWNLOAD_STATUSES.has(state?.download?.status);
   const hasAnalysisResult = ["ready", "partial", "error"].includes(
@@ -240,11 +286,16 @@ function renderState(state, streamPermissionGranted) {
   );
   const downloadBlockReason = getDownloadBlockReason(state);
 
+  renderVideoSelector(state, downloadIsActive);
   pageTitle.textContent = state?.pageTitle || "Not detected";
-  streamLabel.textContent = hasStream
+  videoProvider.textContent = selectedVideo?.provider || "Not detected";
+  videoSource.textContent = selectedVideo?.sourceTypes?.length
+    ? selectedVideo.sourceTypes.join(", ")
+    : "Not detected";
+  streamLabel.textContent = hasSource
     ? state.stream.safeLabel
     : "Not detected";
-  detectedTime.textContent = hasStream
+  detectedTime.textContent = hasSource
     ? formatDetectedTime(state.stream.detectedAt)
     : "Not available";
 
@@ -252,7 +303,7 @@ function renderState(state, streamPermissionGranted) {
   renderDownload(state?.download);
 
   permissionButton.hidden = streamPermissionGranted;
-  analyzeButton.disabled = !hasStream || isAnalyzing || downloadIsActive;
+  analyzeButton.disabled = !hasHls || isAnalyzing || downloadIsActive;
   analyzeButton.textContent = hasAnalysisResult
     ? "Analyze again"
     : "Analyze playlist";
@@ -262,7 +313,8 @@ function renderState(state, streamPermissionGranted) {
       ? "Download again"
       : "Download MPEG-TS";
   cancelButton.hidden = !downloadIsActive;
-  cancelButton.disabled = !downloadIsActive || state?.download?.status === "canceling";
+  cancelButton.disabled =
+    !downloadIsActive || state?.download?.status === "canceling";
 
   if (!isCanvasPage) {
     pageStatus.textContent = "This is not an FIU Canvas page.";
@@ -273,19 +325,28 @@ function renderState(state, streamPermissionGranted) {
   if (!streamPermissionGranted) {
     pageStatus.textContent = "FIU Canvas page detected.";
     helpText.textContent =
-      "Enable stream detection then reload the page and play the video.";
+      "Enable stream detection then reload the page and play each video.";
     return;
   }
 
-  if (!hasStream) {
-    pageStatus.textContent = "FIU Canvas page detected. Waiting for HLS.";
+  if (!hasSource) {
+    pageStatus.textContent = "FIU Canvas page detected. Waiting for video sources.";
     helpText.textContent =
-      "Reload the video page and press Play so Firefox requests the playlist.";
+      "Press Play on each embedded video so Firefox requests its media source.";
+    return;
+  }
+
+  if (!hasHls) {
+    pageStatus.textContent = `${state.stream.formatLabel} source detected.`;
+    helpText.textContent =
+      state.stream.sourceType === "direct"
+        ? "Direct video download will be added in Phase 4B. Select another video if it has HLS."
+        : "MPEG DASH download will be added later. Select another video if it has HLS.";
     return;
   }
 
   if (isAnalyzing) {
-    pageStatus.textContent = "Reading HLS playlists.";
+    pageStatus.textContent = "Reading the selected HLS playlists.";
     helpText.textContent = "Keep this popup open until the analysis finishes.";
     return;
   }
@@ -307,7 +368,7 @@ function renderState(state, streamPermissionGranted) {
 
   if (state?.download?.status === "canceled") {
     pageStatus.textContent = "Video download canceled.";
-    helpText.textContent = "You can start the download again.";
+    helpText.textContent = "You can start the selected video again.";
     return;
   }
 
@@ -318,7 +379,7 @@ function renderState(state, streamPermissionGranted) {
   }
 
   if (state?.analysis?.status === "error") {
-    pageStatus.textContent = "HLS stream detected but analysis failed.";
+    pageStatus.textContent = "HLS source detected but analysis failed.";
     helpText.textContent =
       "Try Analyze again. A 401 or 403 may mean the server requires the original page request context.";
     return;
@@ -333,8 +394,8 @@ function renderState(state, streamPermissionGranted) {
     return;
   }
 
-  pageStatus.textContent = "Successful HLS playlist detected.";
-  helpText.textContent = "Select Analyze playlist to read its HLS metadata.";
+  pageStatus.textContent = "Video source detected.";
+  helpText.textContent = "Select Analyze playlist to read the selected HLS metadata.";
 }
 
 // loads the current tab state and updates the popup
@@ -385,17 +446,38 @@ permissionButton.addEventListener("click", async () => {
 
   await refreshPopup();
   helpText.textContent =
-    "Permission granted. Reload the Canvas video page and press Play.";
+    "Permission granted. Reload the Canvas page and press Play on each video.";
 });
 
-// starts playlist parsing for the current tab
+// changes which detected video the popup controls
+videoSelector.addEventListener("change", async () => {
+  if (!Number.isInteger(activeTabId) || !videoSelector.value) {
+    return;
+  }
+
+  videoSelector.disabled = true;
+
+  try {
+    const state = await browser.runtime.sendMessage({
+      type: "SELECT_VIDEO",
+      tabId: activeTabId,
+      videoId: videoSelector.value
+    });
+
+    renderState(state, await hasStreamHostPermission());
+  } catch {
+    helpText.textContent = "Firefox could not change the selected video.";
+  }
+});
+
+// starts playlist parsing for the selected video
 analyzeButton.addEventListener("click", async () => {
   if (!Number.isInteger(activeTabId)) {
     return;
   }
 
   analyzeButton.disabled = true;
-  helpText.textContent = "Reading the captured playlists.";
+  helpText.textContent = "Reading the selected video playlists.";
 
   try {
     const state = await browser.runtime.sendMessage({
