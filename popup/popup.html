@@ -58,7 +58,34 @@
             <dt>Encryption</dt>
             <dd id="encryption-status">Not available</dd>
           </div>
+          <div>
+            <dt>Download status</dt>
+            <dd id="download-status">Not started</dd>
+          </div>
+          <div>
+            <dt>File</dt>
+            <dd id="download-filename">Not available</dd>
+          </div>
+          <div>
+            <dt>Progress</dt>
+            <dd id="download-progress-text">Not available</dd>
+          </div>
+          <div>
+            <dt>Downloaded</dt>
+            <dd id="download-size">Not available</dd>
+          </div>
+          <div>
+            <dt>Speed</dt>
+            <dd id="download-speed">Not available</dd>
+          </div>
         </dl>
+
+        <progress
+          id="download-progress"
+          class="download-progress"
+          max="100"
+          value="0"
+        ></progress>
       </section>
 
       <button id="permission-button" type="button" hidden>
@@ -70,7 +97,11 @@
       </button>
 
       <button id="download-button" type="button" disabled>
-        Download
+        Download MPEG-TS
+      </button>
+
+      <button id="cancel-button" type="button" hidden disabled>
+        Cancel download
       </button>
 
       <p id="help-text" class="help-text">
@@ -81,4 +112,3 @@
     <script src="popup.js"></script>
   </body>
 </html>
-

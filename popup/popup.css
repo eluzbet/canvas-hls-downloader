@@ -56,6 +56,12 @@ dd {
   font-size: 13px;
 }
 
+.download-progress {
+  width: 100%;
+  height: 12px;
+  margin-top: 12px;
+}
+
 button {
   min-height: 38px;
   border: 1px solid color-mix(in srgb, CanvasText 25%, transparent);
@@ -77,4 +83,3 @@ button:disabled {
   line-height: 1.4;
   color: color-mix(in srgb, CanvasText 72%, transparent);
 }
-

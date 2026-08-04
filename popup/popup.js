@@ -1,5 +1,11 @@
 const CANVAS_ORIGIN = "https://fiu.instructure.com";
 const STREAM_ORIGINS = ["<all_urls>"];
+const ACTIVE_DOWNLOAD_STATUSES = new Set([
+  "preparing",
+  "downloading",
+  "saving",
+  "canceling"
+]);
 
 const pageStatus = document.querySelector("#page-status");
 const pageTitle = document.querySelector("#page-title");
@@ -13,9 +19,16 @@ const mediaContainer = document.querySelector("#media-container");
 const segmentCount = document.querySelector("#segment-count");
 const mediaDuration = document.querySelector("#media-duration");
 const encryptionStatus = document.querySelector("#encryption-status");
+const downloadStatus = document.querySelector("#download-status");
+const downloadFilename = document.querySelector("#download-filename");
+const downloadProgressText = document.querySelector("#download-progress-text");
+const downloadSize = document.querySelector("#download-size");
+const downloadSpeed = document.querySelector("#download-speed");
+const downloadProgress = document.querySelector("#download-progress");
 const permissionButton = document.querySelector("#permission-button");
 const analyzeButton = document.querySelector("#analyze-button");
 const downloadButton = document.querySelector("#download-button");
+const cancelButton = document.querySelector("#cancel-button");
 const helpText = document.querySelector("#help-text");
 
 let activeTabId = null;
@@ -64,6 +77,32 @@ function formatDuration(totalSeconds) {
   }
 
   return `${minutes}m ${seconds}s`;
+}
+
+// formats bytes for the popup
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "Not available";
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const unitIndex = Math.min(
+    units.length - 1,
+    Math.floor(Math.log(bytes) / Math.log(1024))
+  );
+  const value = bytes / 1024 ** unitIndex;
+  const decimals = value >= 100 || unitIndex === 0 ? 0 : value >= 10 ? 1 : 2;
+
+  return `${value.toFixed(decimals)} ${units[unitIndex]}`;
+}
+
+// formats a byte speed for the popup
+function formatSpeed(bytesPerSecond) {
+  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond <= 0) {
+    return "Not available";
+  }
+
+  return `${formatBytes(bytesPerSecond)}/s`;
 }
 
 // checks if stream host access is already granted
@@ -123,14 +162,83 @@ function renderAnalysis(analysis) {
   }
 }
 
-// renders all current tab and playlist state
+// turns a download status into readable text
+function makeDownloadStatusLabel(download) {
+  const labels = {
+    idle: "Not started",
+    preparing: "Preparing",
+    downloading: "Downloading segments",
+    saving: "Saving through Firefox",
+    canceling: "Canceling",
+    canceled: "Canceled",
+    complete: "Complete",
+    error: download?.error?.message || "Failed"
+  };
+
+  return labels[download?.status] || "Not started";
+}
+
+// writes download details into the popup
+function renderDownload(download) {
+  const progress = Number(download?.progressPercent || 0);
+  const completedSegments = Number(download?.completedSegments || 0);
+  const totalSegments = Number(download?.totalSegments || 0);
+
+  downloadStatus.textContent = makeDownloadStatusLabel(download);
+  downloadFilename.textContent = download?.filename || "Not available";
+  downloadProgress.value = Math.max(0, Math.min(100, progress));
+  downloadProgressText.textContent = totalSegments
+    ? `${completedSegments} of ${totalSegments} segments ${Math.round(progress)}%`
+    : "Not available";
+  downloadSize.textContent = formatBytes(download?.downloadedBytes);
+  downloadSpeed.textContent = formatSpeed(download?.speedBytesPerSecond);
+}
+
+// checks why the current analysis cannot download yet
+function getDownloadBlockReason(state) {
+  const analysis = state?.analysis;
+
+  if (analysis?.status !== "ready") {
+    return "Analyze the playlist before downloading";
+  }
+
+  if (analysis.media?.container !== "MPEG-TS") {
+    return "Phase 3 only downloads MPEG TS streams";
+  }
+
+  if (analysis.media?.isEncrypted) {
+    return "Encrypted HLS streams are not supported in Phase 3";
+  }
+
+  if (analysis.media?.hasInitSegment) {
+    return "Initialization segments are handled in a later phase";
+  }
+
+  if (!analysis.media?.hasEndList) {
+    return "Live HLS playlists are not supported in Phase 3";
+  }
+
+  if (analysis.media?.hasDiscontinuity) {
+    return "Playlists with discontinuities are not supported in Phase 3";
+  }
+
+  if (analysis.selectedStream?.audioGroup) {
+    return "Separate audio groups are not supported in Phase 3";
+  }
+
+  return null;
+}
+
+// renders all current tab playlist and download state
 function renderState(state, streamPermissionGranted) {
   const isCanvasPage = Boolean(state?.isCanvasPage);
   const hasStream = Boolean(state?.streamDetected && state.stream);
   const isAnalyzing = state?.analysis?.status === "loading";
+  const downloadIsActive = ACTIVE_DOWNLOAD_STATUSES.has(state?.download?.status);
   const hasAnalysisResult = ["ready", "partial", "error"].includes(
     state?.analysis?.status
   );
+  const downloadBlockReason = getDownloadBlockReason(state);
 
   pageTitle.textContent = state?.pageTitle || "Not detected";
   streamLabel.textContent = hasStream
@@ -141,13 +249,20 @@ function renderState(state, streamPermissionGranted) {
     : "Not available";
 
   renderAnalysis(state?.analysis);
+  renderDownload(state?.download);
 
   permissionButton.hidden = streamPermissionGranted;
-  analyzeButton.disabled = !hasStream || isAnalyzing;
+  analyzeButton.disabled = !hasStream || isAnalyzing || downloadIsActive;
   analyzeButton.textContent = hasAnalysisResult
     ? "Analyze again"
     : "Analyze playlist";
-  downloadButton.disabled = !hasStream;
+  downloadButton.disabled = Boolean(downloadBlockReason) || downloadIsActive;
+  downloadButton.textContent =
+    state?.download?.status === "complete"
+      ? "Download again"
+      : "Download MPEG-TS";
+  cancelButton.hidden = !downloadIsActive;
+  cancelButton.disabled = !downloadIsActive || state?.download?.status === "canceling";
 
   if (!isCanvasPage) {
     pageStatus.textContent = "This is not an FIU Canvas page.";
@@ -175,6 +290,33 @@ function renderState(state, streamPermissionGranted) {
     return;
   }
 
+  if (downloadIsActive) {
+    pageStatus.textContent = "Downloading the selected MPEG TS stream.";
+    helpText.textContent =
+      state.download.status === "saving"
+        ? "Firefox is copying the completed file to your Downloads folder."
+        : "You can close the popup but keep the Canvas tab open.";
+    return;
+  }
+
+  if (state?.download?.status === "complete") {
+    pageStatus.textContent = "Video download complete.";
+    helpText.textContent = "The MPEG TS file was saved through Firefox Downloads.";
+    return;
+  }
+
+  if (state?.download?.status === "canceled") {
+    pageStatus.textContent = "Video download canceled.";
+    helpText.textContent = "You can start the download again.";
+    return;
+  }
+
+  if (state?.download?.status === "error") {
+    pageStatus.textContent = "Video download failed.";
+    helpText.textContent = state.download.error?.message || "Try again.";
+    return;
+  }
+
   if (state?.analysis?.status === "error") {
     pageStatus.textContent = "HLS stream detected but analysis failed.";
     helpText.textContent =
@@ -185,8 +327,9 @@ function renderState(state, streamPermissionGranted) {
   if (["ready", "partial"].includes(state?.analysis?.status)) {
     pageStatus.textContent = "HLS playlist analyzed.";
     helpText.textContent =
+      downloadBlockReason ||
       state.analysis.warning ||
-      "Phase 2 stops here. Segment downloading is not implemented yet.";
+      "The selected MPEG TS stream is ready to download.";
     return;
   }
 
@@ -267,10 +410,46 @@ analyzeButton.addEventListener("click", async () => {
   }
 });
 
-// keeps download disabled as a real action during phase 2
-downloadButton.addEventListener("click", () => {
-  helpText.textContent =
-    "The selected stream is ready for Phase 3. Segment downloading is not implemented yet.";
+// starts the selected mpeg ts download
+downloadButton.addEventListener("click", async () => {
+  if (!Number.isInteger(activeTabId)) {
+    return;
+  }
+
+  downloadButton.disabled = true;
+  helpText.textContent = "Preparing the selected MPEG TS stream.";
+
+  try {
+    const state = await browser.runtime.sendMessage({
+      type: "START_DOWNLOAD",
+      tabId: activeTabId
+    });
+
+    renderState(state, await hasStreamHostPermission());
+  } catch {
+    helpText.textContent = "Firefox could not start the download. Try again.";
+  }
+});
+
+// cancels the current segment or browser save operation
+cancelButton.addEventListener("click", async () => {
+  if (!Number.isInteger(activeTabId)) {
+    return;
+  }
+
+  cancelButton.disabled = true;
+  helpText.textContent = "Canceling the current download.";
+
+  try {
+    const state = await browser.runtime.sendMessage({
+      type: "CANCEL_DOWNLOAD",
+      tabId: activeTabId
+    });
+
+    renderState(state, await hasStreamHostPermission());
+  } catch {
+    helpText.textContent = "Firefox could not cancel the download cleanly.";
+  }
 });
 
 // refreshes the popup when background state changes
@@ -281,4 +460,3 @@ browser.runtime.onMessage.addListener((message) => {
 });
 
 void refreshPopup();
-
