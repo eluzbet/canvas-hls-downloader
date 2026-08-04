@@ -1,0 +1,41 @@
+{
+  "manifest_version": 3,
+  "name": "Canvas HLS Downloader",
+  "version": "0.1.0",
+  "description": "Detects successful HLS playlist requests on FIU Canvas video pages.",
+  "permissions": [
+    "storage",
+    "webRequest"
+  ],
+  "host_permissions": [
+    "https://fiu.instructure.com/*"
+  ],
+  "optional_host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "scripts": [
+      "background/background.js"
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://fiu.instructure.com/*"
+      ],
+      "js": [
+        "content/canvas-page.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Canvas HLS Downloader",
+    "default_popup": "popup/popup.html"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "strict_min_version": "128.0"
+    }
+  }
+}

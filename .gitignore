@@ -1,0 +1,53 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Firefox extension packages and build output
+*.xpi
+web-ext-artifacts/
+build/
+dist/
+
+# Local environment and configuration
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs, debugging, and network captures
+*.log
+*.har
+captures/
+debug/
+screenshots/
+
+# Browser profile data
+firefox-profile/
+browser-profile/
+profiles/
+
+# Downloaded Canvas content
+downloads/
+private/
+course-content/
+test-data/private/
+
+# HLS playlists and video media
+*.m3u8
+*.m4s
+*.ts
+*.mp4
+*.webm
+*.aac
+
+# Subtitles and generated course indexes
+*.vtt
+*.srt
+course-indexes/
+
+# Temporary files
+*.tmp
+*.temp
+*.part
+*.download

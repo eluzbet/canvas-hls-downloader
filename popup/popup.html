@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Canvas HLS Downloader</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup-shell">
+      <h1>Canvas HLS Downloader</h1>
+
+      <section class="status-card" aria-live="polite">
+        <p id="page-status" class="status-line">Checking the current tab...</p>
+
+        <dl>
+          <div>
+            <dt>Page title</dt>
+            <dd id="page-title">Not detected</dd>
+          </div>
+          <div>
+            <dt>HLS stream</dt>
+            <dd id="stream-label">Not detected</dd>
+          </div>
+          <div>
+            <dt>Detected</dt>
+            <dd id="detected-time">Not available</dd>
+          </div>
+        </dl>
+      </section>
+
+      <button id="permission-button" type="button" hidden>
+        Enable stream detection
+      </button>
+
+      <button id="download-button" type="button" disabled>
+        Download
+      </button>
+
+      <p id="help-text" class="help-text">
+        Open an FIU Canvas video page and play the video.
+      </p>
+    </main>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
