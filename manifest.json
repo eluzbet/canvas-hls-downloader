@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Canvas HLS Downloader",
-  "version": "0.3.0",
-  "description": "Detects analyzes and downloads unencrypted MPEG TS HLS videos from FIU Canvas",
+  "version": "0.4.0",
+  "description": "Detects multiple HLS Kaltura DASH and direct video sources on FIU Canvas",
   "permissions": [
     "storage",
     "webRequest",
@@ -17,6 +17,7 @@
   "background": {
     "scripts": [
       "lib/hls.js",
+      "lib/media.js",
       "background/background.js"
     ]
   },

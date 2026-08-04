@@ -1,7 +1,7 @@
 const CANVAS_ORIGIN = "https://fiu.instructure.com";
 const STATE_KEY_PREFIX = "canvas-tab-state:";
 const TEMP_FILE_PREFIX = "canvas-hls-temp-";
-const MAX_STREAMS_PER_TAB = 20;
+const MAX_STREAMS_PER_VIDEO = 30;
 const MAX_PLAYLIST_BYTES = 5 * 1024 * 1024;
 const SEGMENT_RETRY_COUNT = 3;
 const SEGMENT_RETRY_DELAY_MS = 750;
@@ -47,6 +47,21 @@ function createDownloadState(status = "idle") {
   };
 }
 
+// makes a new video state inside one canvas tab
+function createVideoState(videoId, groupKey, order, provider = "Other") {
+  return {
+    id: videoId,
+    groupKey,
+    order,
+    label: `Video ${order}`,
+    provider,
+    streams: [],
+    analysis: createAnalysisState(),
+    download: createDownloadState(),
+    updatedAt: null
+  };
+}
+
 // makes a clean starting state for one tab
 function createTabState(tabId) {
   return {
@@ -54,6 +69,9 @@ function createTabState(tabId) {
     isCanvasPage: false,
     pageTitle: "",
     pageUrl: "",
+    videos: [],
+    selectedVideoId: null,
+    nextVideoNumber: 1,
     streams: [],
     analysis: createAnalysisState(),
     download: createDownloadState(),
@@ -71,24 +89,68 @@ function isCanvasUrl(rawUrl) {
   }
 }
 
-// checks if a url ends with m3u8
-function isHlsPlaylistUrl(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    return /\.m3u8$/i.test(url.pathname);
-  } catch {
-    return false;
-  }
+// finds the selected video state
+function getSelectedVideo(state) {
+  return state.videos.find((video) => video.id === state.selectedVideoId) || null;
 }
 
-// makes a safe stream summary without query values
-function summarizeStreamUrl(rawUrl) {
-  const url = new URL(rawUrl);
-  const summary = HlsParser.summarizeUrl(rawUrl);
+// copies the selected video into the old working fields
+function syncSelectedVideoToTopLevel(state) {
+  const selectedVideo = getSelectedVideo(state);
+
+  if (!selectedVideo) {
+    state.streams = [];
+    state.analysis = createAnalysisState();
+    state.download = createDownloadState();
+    return;
+  }
+
+  state.streams = selectedVideo.streams;
+  state.analysis = selectedVideo.analysis;
+  state.download = selectedVideo.download;
+}
+
+// copies working fields back into the selected video
+function syncTopLevelToSelectedVideo(state) {
+  const selectedVideo = getSelectedVideo(state);
+
+  if (!selectedVideo) {
+    return;
+  }
+
+  selectedVideo.streams = state.streams;
+  selectedVideo.analysis = state.analysis;
+  selectedVideo.download = state.download;
+  selectedVideo.updatedAt = state.updatedAt;
+}
+
+// checks if any download is active in this tab
+function hasActiveTabDownload(state) {
+  return state.videos.some((video) => isDownloadActive(video.download?.status));
+}
+
+// makes one video summary for the popup selector
+function publicVideoSummary(video) {
+  const latestStream = video.streams.at(-1) || null;
+  const sourceTypes = [...new Set(video.streams.map((stream) => stream.formatLabel))];
 
   return {
-    ...summary,
-    queryParameterCount: [...url.searchParams.keys()].length
+    id: video.id,
+    order: video.order,
+    label: video.label,
+    provider: video.provider,
+    sourceTypes,
+    streamCount: video.streams.length,
+    canAnalyzeHls: video.streams.some((stream) => stream.sourceType === "hls"),
+    latestStream: latestStream
+      ? {
+          host: latestStream.host,
+          fileName: latestStream.fileName,
+          safeLabel: latestStream.safeLabel,
+          formatLabel: latestStream.formatLabel,
+          detectedAt: latestStream.detectedAt
+        }
+      : null
   };
 }
 
@@ -108,21 +170,43 @@ function delay(milliseconds) {
 async function loadTabState(tabId) {
   const key = stateKey(tabId);
   const result = await browser.storage.session.get(key);
-  const state = result[key] || createTabState(tabId);
+  const storedState = result[key];
+  const state = storedState?.videos ? storedState : createTabState(tabId);
 
-  if (!state.analysis) {
-    state.analysis = createAnalysisState();
+  if (!Array.isArray(state.videos)) {
+    state.videos = [];
   }
 
-  if (!state.download) {
-    state.download = createDownloadState();
+  if (!Number.isInteger(state.nextVideoNumber)) {
+    state.nextVideoNumber = state.videos.length + 1;
   }
 
+  if (!state.selectedVideoId && state.videos.length > 0) {
+    state.selectedVideoId = state.videos[0].id;
+  }
+
+  for (const video of state.videos) {
+    if (!Array.isArray(video.streams)) {
+      video.streams = [];
+    }
+
+    if (!video.analysis) {
+      video.analysis = createAnalysisState();
+    }
+
+    if (!video.download) {
+      video.download = createDownloadState();
+    }
+  }
+
+  syncSelectedVideoToTopLevel(state);
   return state;
 }
 
 // saves one tab state to memory only storage
 async function saveTabState(tabId, state) {
+  syncTopLevelToSelectedVideo(state);
+
   await browser.storage.session.set({
     [stateKey(tabId)]: state
   });
@@ -151,17 +235,26 @@ function publicDownloadState(download) {
 // removes private urls before sending state to the popup
 function publicTabState(state) {
   const latestStream = state.streams.at(-1) || null;
+  const selectedVideo = getSelectedVideo(state);
 
   return {
     tabId: state.tabId,
     isCanvasPage: state.isCanvasPage,
     pageTitle: state.pageTitle,
+    videos: state.videos.map(publicVideoSummary),
+    selectedVideoId: state.selectedVideoId,
+    selectedVideoLabel: selectedVideo?.label || null,
+    selectedVideoProvider: selectedVideo?.provider || null,
+    activeDownload: hasActiveTabDownload(state),
     streamDetected: Boolean(latestStream),
     stream: latestStream
       ? {
           host: latestStream.host,
           fileName: latestStream.fileName,
           safeLabel: latestStream.safeLabel,
+          formatLabel: latestStream.formatLabel,
+          sourceType: latestStream.sourceType,
+          contentType: latestStream.contentType,
           statusCode: latestStream.statusCode,
           requestType: latestStream.requestType,
           detectedAt: latestStream.detectedAt
@@ -170,6 +263,49 @@ function publicTabState(state) {
     analysis: publicAnalysisState(state.analysis),
     download: publicDownloadState(state.download)
   };
+}
+
+// creates or finds a video for one completed request
+function findOrCreateVideo(state, details, classification) {
+  const groupKey = MediaDetector.makePrivateGroupKey(details, classification);
+  let video = state.videos.find((item) => item.groupKey === groupKey);
+
+  if (!video) {
+    const order = state.nextVideoNumber;
+    video = createVideoState(`video-${order}`, groupKey, order, classification.provider);
+    state.nextVideoNumber += 1;
+    state.videos.push(video);
+
+    if (!state.selectedVideoId) {
+      state.selectedVideoId = video.id;
+    }
+  } else if (video.provider === "Other" && classification.provider !== "Other") {
+    video.provider = classification.provider;
+  }
+
+  return video;
+}
+
+// changes the selected video when no download is active
+async function selectVideo(tabId, videoId) {
+  const state = await loadTabState(tabId);
+
+  if (hasActiveTabDownload(state)) {
+    return publicTabState(state);
+  }
+
+  if (!state.videos.some((video) => video.id === videoId)) {
+    return publicTabState(state);
+  }
+
+  syncTopLevelToSelectedVideo(state);
+  state.selectedVideoId = videoId;
+  syncSelectedVideoToTopLevel(state);
+  state.updatedAt = new Date().toISOString();
+
+  await saveTabState(tabId, state);
+  await notifyStateUpdated(tabId);
+  return publicTabState(state);
 }
 
 // tells an open popup that tab state changed
@@ -556,7 +692,9 @@ function normalizeAnalysisError(error) {
 async function analyzeTabPlaylists(tabId) {
   const state = await loadTabState(tabId);
 
-  if (!state.isCanvasPage || state.streams.length === 0) {
+  const hlsStreams = state.streams.filter((stream) => stream.sourceType === "hls");
+
+  if (!state.isCanvasPage || hlsStreams.length === 0) {
     return publicTabState(state);
   }
 
@@ -570,7 +708,7 @@ async function analyzeTabPlaylists(tabId) {
   await notifyStateUpdated(tabId);
 
   try {
-    const analysis = await buildPlaylistAnalysis(state.streams);
+    const analysis = await buildPlaylistAnalysis(hlsStreams);
     const latestState = await loadTabState(tabId);
     latestState.analysis = analysis;
     latestState.updatedAt = analysis.analyzedAt;
@@ -616,7 +754,7 @@ function isDownloadActive(status) {
   return ["preparing", "downloading", "saving", "canceling"].includes(status);
 }
 
-// checks if phase 3 can download the analyzed stream
+// checks if phase 4a can download the analyzed stream
 function getDownloadBlockReason(state) {
   const analysis = state.analysis;
 
@@ -629,11 +767,11 @@ function getDownloadBlockReason(state) {
   }
 
   if (analysis.media.container !== "MPEG-TS") {
-    return "Phase 3 only downloads MPEG TS streams";
+    return "Phase 4A only downloads MPEG TS HLS streams";
   }
 
   if (analysis.media.isEncrypted) {
-    return "Encrypted HLS streams are not supported in Phase 3";
+    return "Encrypted HLS streams are not supported in Phase 4A";
   }
 
   if (analysis.media.hasInitSegment) {
@@ -641,22 +779,22 @@ function getDownloadBlockReason(state) {
   }
 
   if (!analysis.media.hasEndList) {
-    return "Live HLS playlists are not supported in Phase 3";
+    return "Live HLS playlists are not supported in Phase 4A";
   }
 
   if (analysis.media.hasDiscontinuity) {
-    return "Playlists with discontinuities are not supported in Phase 3";
+    return "Playlists with discontinuities are not supported in Phase 4A";
   }
 
   if (analysis.selectedStream?.audioGroup) {
-    return "Separate audio groups are not supported in Phase 3";
+    return "Separate audio groups are not supported in Phase 4A";
   }
 
   return null;
 }
 
 // cleans a page title for a local video filename
-function makeDownloadFilename(pageTitle, selectedQuality) {
+function makeDownloadFilename(pageTitle, selectedQuality, videoLabel = "") {
   let cleanTitle = String(pageTitle || "Canvas video")
     .normalize("NFKC")
     .replace(/^Video:\s*/i, "")
@@ -669,11 +807,16 @@ function makeDownloadFilename(pageTitle, selectedQuality) {
     cleanTitle = "Canvas video";
   }
 
+  const videoSuffix = String(videoLabel || "")
+    .replace(/[^0-9A-Za-z ._-]+/g, "")
+    .trim();
   const quality = String(selectedQuality || "")
     .replace(/\s*×\s*/g, "x")
     .replace(/[^0-9A-Za-z.-]+/g, "")
     .trim();
-  const suffix = quality ? ` - ${quality}` : "";
+  const labelPart = videoSuffix ? ` - ${videoSuffix}` : "";
+  const qualityPart = quality ? ` - ${quality}` : "";
+  const suffix = `${labelPart}${qualityPart}`;
   const maximumBaseLength = Math.max(20, 180 - suffix.length - 3);
   const baseName = cleanTitle.slice(0, maximumBaseLength).trim();
 
@@ -1041,35 +1184,35 @@ function validateDownloadMedia(state, media) {
   if (media.container !== "MPEG-TS") {
     throw {
       code: "UNSUPPORTED_CONTAINER",
-      message: "Phase 3 only downloads MPEG TS streams"
+      message: "Phase 4A only downloads MPEG TS HLS streams"
     };
   }
 
   if (media.isEncrypted) {
     throw {
       code: "UNSUPPORTED_ENCRYPTION",
-      message: "Encrypted HLS streams are not supported in Phase 3"
+      message: "Encrypted HLS streams are not supported in Phase 4A"
     };
   }
 
   if (!media.hasEndList) {
     throw {
       code: "UNSUPPORTED_LIVE_PLAYLIST",
-      message: "Live HLS playlists are not supported in Phase 3"
+      message: "Live HLS playlists are not supported in Phase 4A"
     };
   }
 
   if (media.hasDiscontinuity) {
     throw {
       code: "UNSUPPORTED_DISCONTINUITY",
-      message: "Playlists with discontinuities are not supported in Phase 3"
+      message: "Playlists with discontinuities are not supported in Phase 4A"
     };
   }
 
   if (state.analysis.selectedStream?.audioGroup) {
     throw {
       code: "UNSUPPORTED_SEPARATE_AUDIO",
-      message: "Separate audio groups are not supported in Phase 3"
+      message: "Separate audio groups are not supported in Phase 4A"
     };
   }
 
@@ -1159,7 +1302,8 @@ async function runMpegTsDownload(tabId) {
     const segments = prepareSegmentsForDownload(media.segments);
     const filename = makeDownloadFilename(
       state.pageTitle,
-      state.analysis.selectedQuality
+      state.analysis.selectedQuality,
+      state.videos.length > 1 ? getSelectedVideo(state)?.label : ""
     );
     const estimatedBytes = estimateOutputBytes(state.analysis);
     await checkStorageSpace(estimatedBytes);
@@ -1284,7 +1428,7 @@ async function runMpegTsDownload(tabId) {
   }
 }
 
-// starts one phase 3 download without exposing playlist urls
+// starts one phase 4a download without exposing playlist urls
 async function startDownload(tabId) {
   const state = await loadTabState(tabId);
 
@@ -1312,7 +1456,8 @@ async function startDownload(tabId) {
     ...createDownloadState("preparing"),
     filename: makeDownloadFilename(
       state.pageTitle,
-      state.analysis.selectedQuality
+      state.analysis.selectedQuality,
+      state.videos.length > 1 ? getSelectedVideo(state)?.label : ""
     ),
     totalSegments: state.analysis.media?.segmentCount || 0,
     startedAt: new Date().toISOString()
@@ -1325,7 +1470,7 @@ async function startDownload(tabId) {
   return publicTabState(state);
 }
 
-// cancels one active phase 3 download
+// cancels one active phase 4a download
 async function cancelDownload(tabId) {
   const state = await loadTabState(tabId);
   const job = activeDownloads.get(tabId);
@@ -1361,13 +1506,11 @@ async function cancelDownload(tabId) {
   return publicTabState(await loadTabState(tabId));
 }
 
-// records one completed successful playlist request
-async function captureCompletedPlaylist(details) {
-  if (
-    details.tabId < 0 ||
-    details.statusCode !== 200 ||
-    !isHlsPlaylistUrl(details.url)
-  ) {
+// records one completed video source request
+async function captureCompletedMedia(details) {
+  const classification = MediaDetector.classifyRequest(details);
+
+  if (!classification) {
     return;
   }
 
@@ -1377,9 +1520,20 @@ async function captureCompletedPlaylist(details) {
     return;
   }
 
-  const summary = summarizeStreamUrl(details.url);
+  const video = findOrCreateVideo(state, details, classification);
+  const summary = MediaDetector.summarizeUrl(
+    details.url,
+    classification.formatLabel
+  );
   const stream = {
     url: details.url,
+    dedupeKey: MediaDetector.makeDedupeKey(
+      details.url,
+      classification.sourceType
+    ),
+    sourceType: classification.sourceType,
+    formatLabel: classification.formatLabel,
+    contentType: classification.contentType,
     host: summary.host,
     fileName: summary.fileName,
     safeLabel: summary.safeLabel,
@@ -1387,34 +1541,41 @@ async function captureCompletedPlaylist(details) {
     requestType: details.type,
     detectedAt: new Date().toISOString()
   };
-
-  const duplicateIndex = state.streams.findIndex(
-    (item) => item.url === stream.url
+  const duplicateIndex = video.streams.findIndex(
+    (item) => item.dedupeKey === stream.dedupeKey
   );
   const isNewStream = duplicateIndex < 0;
 
   if (duplicateIndex >= 0) {
-    state.streams.splice(duplicateIndex, 1);
+    video.streams.splice(duplicateIndex, 1);
   }
 
-  state.streams.push(stream);
-  state.streams = state.streams.slice(-MAX_STREAMS_PER_TAB);
+  video.streams.push(stream);
+  video.streams = video.streams.slice(-MAX_STREAMS_PER_VIDEO);
+  video.updatedAt = stream.detectedAt;
   state.updatedAt = stream.detectedAt;
 
   if (
     isNewStream &&
-    state.analysis.status !== "loading" &&
-    !isDownloadActive(state.download.status)
+    video.analysis.status !== "loading" &&
+    !isDownloadActive(video.download.status)
   ) {
-    state.analysis = createAnalysisState();
-    state.download = createDownloadState();
+    video.analysis = createAnalysisState();
+    video.download = createDownloadState();
+  }
+
+  if (state.selectedVideoId === video.id) {
+    syncSelectedVideoToTopLevel(state);
   }
 
   await saveTabState(details.tabId, state);
   await notifyStateUpdated(details.tabId);
 
-  safeLog("Successful HLS playlist detected", {
+  safeLog("Successful video source detected", {
     tabId: details.tabId,
+    videoNumber: video.order,
+    provider: video.provider,
+    format: classification.formatLabel,
     statusCode: details.statusCode,
     requestType: details.type,
     host: summary.host,
@@ -1445,11 +1606,12 @@ async function cleanupOrphanedTemporaryFiles() {
 // watches completed requests without blocking them
 browser.webRequest.onCompleted.addListener(
   (details) => {
-    void captureCompletedPlaylist(details);
+    void captureCompletedMedia(details);
   },
   {
     urls: ["<all_urls>"]
-  }
+  },
+  ["responseHeaders"]
 );
 
 // handles messages from canvas pages and the popup
@@ -1466,6 +1628,14 @@ browser.runtime.onMessage.addListener((message, sender) => {
 
   if (message?.type === "GET_TAB_STATE" && Number.isInteger(message.tabId)) {
     return loadTabState(message.tabId).then(publicTabState);
+  }
+
+  if (
+    message?.type === "SELECT_VIDEO" &&
+    Number.isInteger(message.tabId) &&
+    typeof message.videoId === "string"
+  ) {
+    return selectVideo(message.tabId, message.videoId);
   }
 
   if (message?.type === "ANALYZE_TAB" && Number.isInteger(message.tabId)) {
